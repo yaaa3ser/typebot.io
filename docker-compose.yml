@@ -1,3 +1,5 @@
+version: "3.3"
+
 x-typebot-common: &typebot-common
   restart: always
   depends_on:
@@ -5,11 +7,17 @@ x-typebot-common: &typebot-common
       condition: service_healthy
     typebot-db:
       condition: service_healthy
+    minio:
+      condition: service_healthy
   networks:
     - typebot-network
   env_file: .env
   environment:
     REDIS_URL: redis://typebot-redis:6379
+    MINIO_ENDPOINT: http://minio:9000
+    MINIO_ACCESS_KEY: minio
+    MINIO_SECRET_KEY: minio123
+    MINIO_BUCKET: typebot
 
 services:
   typebot-db:
@@ -43,17 +51,55 @@ services:
     networks:
       - typebot-network
 
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123
+    volumes:
+      - s3-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - typebot-network
+
+  createbuckets:
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10;
+      /usr/bin/mc alias set minio http://minio:9000 minio minio123;
+      /usr/bin/mc mb --ignore-existing minio/typebot;
+      /usr/bin/mc anonymous set public minio/typebot/public;
+      exit 0;
+      "
+    networks:
+      - typebot-network
+
   typebot-builder:
     <<: *typebot-common
     image: baptistearno/typebot-builder:latest
     ports:
-      - "8080:3000"
+      - "3000:3000"
+    networks:
+      - typebot-network
 
   typebot-viewer:
     <<: *typebot-common
     image: baptistearno/typebot-viewer:latest
     ports:
-      - "8081:3000"
+      - "3001:3000"
+    networks:
+      - typebot-network
 
 networks:
   typebot-network:
@@ -62,3 +108,4 @@ networks:
 volumes:
   db-data:
   redis-data:
+  s3-data:
